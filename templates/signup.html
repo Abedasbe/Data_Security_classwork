@@ -29,6 +29,18 @@
             border-radius: 4px;
             cursor: pointer;
         }
+        .secondary-button {
+            background-color: #008CBA;
+            margin-top: 10px; /* Adds some margin between buttons */
+        }
+        .link {
+            display: block;
+            text-align: center;
+            margin-top: 15px;
+            text-decoration: none;
+            color: #4CAF50;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -76,5 +88,8 @@
         
         <button type="submit">Sign Up</button>
     </form>
+    
+    <!-- Link to login page -->
+    <a href="{{ url_for('login') }}" class="link">Already have an account? Login</a>
 </body>
 </html>
