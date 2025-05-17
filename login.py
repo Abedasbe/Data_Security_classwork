@@ -1,156 +1,98 @@
-from flask import Flask, request, render_template, redirect, url_for
+# login.py
+
+from flask import Flask, render_template, request, redirect, url_for, flash
 import sqlite3
 import hashlib
+from pathlib import Path
 
 app = Flask(__name__)
-app.secret_key = "secret key"
-DB_PATH = 'users.db'
+app.secret_key = "your-super-secret-key"
+DB_PATH = Path(__file__).with_name("users.db")
 
+# ---------- DB Helpers ----------
 
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
-def get_user(username):
+def get_db():
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-    user = cursor.fetchone()
-    conn.close()
-    return user
+    conn.row_factory = sqlite3.Row
+    return conn
 
+def hash_password_sha256(password):
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+# ---------- Routes ----------
 
-@app.route('/home', methods=['GET', 'POST'])
+@app.route('/')
+def index():
+    return redirect(url_for('home'))
+
+@app.route('/home')
 def home():
-    return render_template("home.html")
-
+    return render_template('home.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
+        form = request.form
+        required_fields = ['first_name', 'last_name', 'user_id', 'username',
+                           'password', 'cc_number', 'cc_valid', 'cvc']
+
+        if not all(form.get(field, '').strip() for field in required_fields):
+            flash("❌ All fields are required.", "error")
+            return render_template('signup.html')
+
         try:
-            # Check if all required fields are present
-            required_fields = ['first_name', 'last_name', 'user_id', 'username',
-                               'password', 'cc_number', 'cc_valid', 'cvc']
+            user = {
+                'first_name': form['first_name'].strip(),
+                'last_name': form['last_name'].strip(),
+                'user_id': form['user_id'].strip(),
+                'username': form['username'].strip(),
+                'password': hash_password_sha256(form['password']),
+                'cc_number': form['cc_number'].replace(" ", ""),
+                'cc_valid': form['cc_valid'],
+                'cvc': form['cvc'],
+                'is_admin': 0
+            }
 
-            for field in required_fields:
-                print(f"{field}: {field in request.form}")
+            with get_db() as db:
+                db.execute("""
+                    INSERT INTO users (first_name, last_name, user_id, username, password,
+                                       cc_number, cc_valid, cvc, is_admin)
+                    VALUES (:first_name, :last_name, :user_id, :username, :password,
+                            :cc_number, :cc_valid, :cvc, :is_admin)
+                """, user)
 
-            missing_fields = [field for field in required_fields if field not in request.form]
-            if missing_fields:
-                return f"❌ Missing required fields: {', '.join(missing_fields)}", 400
+            flash("✅ User registered successfully!", "success")
+            return render_template('success.html')
 
-            try:
-                first_name = request.form['first_name'].strip()
-                last_name = request.form['last_name'].strip()
-                user_id = request.form['user_id'].strip()
-                username = request.form['username'].strip()
-                password = request.form['password']
-                cc_number = request.form['cc_number'].strip()
-                cc_valid = request.form['cc_valid'].strip()
-                cvc = request.form['cvc'].strip()
-            except KeyError as e:
-                return f"❌ Failed to get field: {str(e)}", 400
+        except sqlite3.IntegrityError:
+            flash("❌ Username or User ID already exists.", "error")
+            return render_template('signup.html')
 
-            # Validate empty fields
-            if not all([first_name, last_name, user_id, username, password, cc_number, cc_valid, cvc]):
-                return "❌ All fields must be filled out", 400
-
-            # For debugging - print received data (remove in production)
-            print("Received form data:", {
-                'first_name': first_name,
-                'last_name': last_name,
-                'user_id': user_id,
-                'username': username,
-                'cc_number': cc_number,
-                'cc_valid': cc_valid,
-                'cvc': cvc
-            })
-
-            hashed = hash_password(password)
-
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    first_name TEXT,
-                    last_name TEXT,
-                    user_id TEXT UNIQUE,
-                    username TEXT UNIQUE,
-                    password TEXT,
-                    cc_number TEXT,
-                    cc_valid TEXT,
-                    cvc TEXT,
-                    is_admin INTEGER DEFAULT 0
-                )
-            """)
-
-            cursor.execute("""
-                INSERT INTO users (first_name, last_name, user_id, username, password, 
-                                 cc_number, cc_valid, cvc, is_admin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (first_name, last_name, user_id, username, hashed,
-                  cc_number, cc_valid, cvc, 0))
-            
-            conn.commit()
-            msg = "✅ User registered successfully!"
-            
-        except sqlite3.OperationalError as e:
-            msg = f"❌ Database Error: {str(e)}"
-            print("Database Error:", str(e))
-            return msg, 500
-        except sqlite3.IntegrityError as e:
-            msg = f"❌ Data Error: Username or User ID already exists"
-            print("Integrity Error:", str(e))
-            return msg, 400
-        except Exception as e:
-            msg = f"❌ Unexpected Error: {str(e)}"
-            print("Unexpected Error:", str(e))
-            return msg, 500
-        finally:
-            if 'conn' in locals():
-                conn.close()
-            
-        return render_template('success.html', message=msg)
-    
     return render_template('signup.html')
-
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
+        # Retrieve and strip username and password from the form
+        username = request.form['username'].strip()
         password = request.form['password']
 
-        hashed = hash_password(password)
-        query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{hashed}'"
-
-        print("Executing SQL:", query)
-
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        try:
-            user = cursor.execute(query).fetchone()
-        except sqlite3.OperationalError as e:
-            return f"SQL Error: {e}"
-
-        if user:
-            return f"✅ Welcome {user['username']}! Your role: {user['role']}"
+        with get_db() as db:
+            user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        if user and hash_password_sha256(user['password'], password):
+            role = "admin" if user["is_admin"] else "user"
+            msg = f"✅ Welcome <b>{user['username']}</b>! You’re logged in as <b>{role}</b>."
+            flash("✅ User logged in successfully!", "success")
+            return render_template('success.html')
         else:
-            return "❌ Log in failed."
+            flash("❌ Invalid username or password.", "error")
+            return render_template('login.html')
+    # Render the login page for GET requests
     return render_template('login.html')
 
-@app.route('/forgot')
-def forgot_password():
-    return "Password reset is not possible. Contact admin."
-
-# Add this route
-@app.route('/')
-def index():
-    return redirect(url_for('home'))
+@app.route('/success')
+def success():
+    return render_template('success.html')
+# ---------- Run ----------
 
 if __name__ == '__main__':
     app.run(debug=True)
