@@ -1,98 +1,93 @@
-# login.py
-
 from flask import Flask, render_template, request, redirect, url_for, flash
-import sqlite3
-import hashlib
+import sqlite3, hashlib, re
 from pathlib import Path
 
 app = Flask(__name__)
-app.secret_key = "your-super-secret-key"
+app.secret_key = "replace‑with‑env‑secret"
 DB_PATH = Path(__file__).with_name("users.db")
 
-# ---------- DB Helpers ----------
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ───── helpers ─────
+def get_db() -> sqlite3.Connection:
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    return c
 
-def hash_password_sha256(password):
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
-# ---------- Routes ----------
 
-@app.route('/')
-def index():
-    return redirect(url_for('home'))
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
-@app.route('/home')
-def home():
-    return render_template('home.html')
 
-@app.route('/signup', methods=['GET', 'POST'])
+ILLEGAL = re.compile(r"[\'\";#\-]")  # basic assignment filter
+
+
+def safe(txt: str) -> bool: return not ILLEGAL.search(txt)
+
+
+# ───── routes ─────
+@app.route("/")
+def index(): return redirect(url_for("home"))
+
+
+@app.route("/home")
+def home():  return render_template("home.html")
+
+
+@app.route("/signup", methods=["GET", "POST"])
 def signup():
-    if request.method == 'POST':
-        form = request.form
-        required_fields = ['first_name', 'last_name', 'user_id', 'username',
-                           'password', 'cc_number', 'cc_valid', 'cvc']
+    if request.method == "POST":
+        f = request.form
+        need = ("first_name last_name user_id username password "
+                "cc_number cc_valid cvc").split()
+        if not all(f.get(x, "").strip() for x in need):
+            flash("❌ All fields required.", "error")
+            return render_template("signup.html")
 
-        if not all(form.get(field, '').strip() for field in required_fields):
-            flash("❌ All fields are required.", "error")
-            return render_template('signup.html')
+        if not (safe(f["username"]) and safe(f["password"])):
+            flash("❌ Username or password has illegal chars.", "error")
+            return render_template("signup.html")
+
+        user = {k: f[k].strip() for k in need}
+        user["password"] = sha256(user["password"])
+        user["cc_number"] = user["cc_number"].replace(" ", "")
+        user["is_admin"] = 0
 
         try:
-            user = {
-                'first_name': form['first_name'].strip(),
-                'last_name': form['last_name'].strip(),
-                'user_id': form['user_id'].strip(),
-                'username': form['username'].strip(),
-                'password': hash_password_sha256(form['password']),
-                'cc_number': form['cc_number'].replace(" ", ""),
-                'cc_valid': form['cc_valid'],
-                'cvc': form['cvc'],
-                'is_admin': 0
-            }
-
             with get_db() as db:
-                db.execute("""
-                    INSERT INTO users (first_name, last_name, user_id, username, password,
-                                       cc_number, cc_valid, cvc, is_admin)
-                    VALUES (:first_name, :last_name, :user_id, :username, :password,
-                            :cc_number, :cc_valid, :cvc, :is_admin)
-                """, user)
-
-            flash("✅ User registered successfully!", "success")
-            return render_template('success.html')
-
+                db.execute("""INSERT INTO users
+                    (first_name,last_name,user_id,username,password,
+                     cc_number,cc_valid,cvc,is_admin)
+                    VALUES (:first_name,:last_name,:user_id,:username,:password,
+                            :cc_number,:cc_valid,:cvc,:is_admin)""", user)
+            flash("✅ Registration successful!", "success")
+            return render_template("success.html")
         except sqlite3.IntegrityError:
-            flash("❌ Username or User ID already exists.", "error")
-            return render_template('signup.html')
+            flash("❌ Username or ID already exists.", "error")
+    return render_template("signup.html")
 
-    return render_template('signup.html')
-
-@app.route('/login', methods=['GET', 'POST'])
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method == 'POST':
-        # Retrieve and strip username and password from the form
-        username = request.form['username'].strip()
-        password = request.form['password']
+    if request.method == "POST":
+        u = request.form["username"].strip()
+        p = request.form["password"]
+        if not (safe(u) and safe(p)):
+            flash("❌ Illegal characters detected.", "error")
+            return render_template("login.html")
 
         with get_db() as db:
-            user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        if user and hash_password_sha256(user['password'], password):
-            role = "admin" if user["is_admin"] else "user"
-            msg = f"✅ Welcome <b>{user['username']}</b>! You’re logged in as <b>{role}</b>."
-            flash("✅ User logged in successfully!", "success")
-            return render_template('success.html')
-        else:
-            flash("❌ Invalid username or password.", "error")
-            return render_template('login.html')
-    # Render the login page for GET requests
-    return render_template('login.html')
+            row = db.execute("SELECT * FROM users WHERE username = ?", (u,)).fetchone()
 
-@app.route('/success')
-def success():
-    return render_template('success.html')
-# ---------- Run ----------
+        if row and row["password"] == sha256(p):
+            role = "admin" if row["is_admin"] else "user"
+            flash("Login successful ✅", "success")
+            return render_template("success.html")
 
-if __name__ == '__main__':
+        flash("❌ Invalid credentials.", "error")
+    return render_template("login.html")
+
+@app.route("/success")
+def success(): return render_template("success.html", message="Success!")
+
+if __name__ == "__main__":
+    DB_PATH.touch(exist_ok=True)
     app.run(debug=True)
