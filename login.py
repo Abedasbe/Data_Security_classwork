@@ -59,10 +59,9 @@ def signup():
                      cc_number,cc_valid,cvc,is_admin)
                     VALUES (:first_name,:last_name,:user_id,:username,:password,
                             :cc_number,:cc_valid,:cvc,:is_admin)""", user)
-            flash("✅ Registration successful!", "success")
             return render_template("success.html")
         except sqlite3.IntegrityError:
-            flash("❌ Username or ID already exists.", "error")
+            return render_template("fail.html")
     return render_template("signup.html")
 
 @app.route("/login", methods=["GET", "POST"])
@@ -71,22 +70,23 @@ def login():
         u = request.form["username"].strip()
         p = request.form["password"]
         if not (safe(u) and safe(p)):
-            flash("❌ Illegal characters detected.", "error")
-            return render_template("login.html")
+            return render_template("fail.html")
 
         with get_db() as db:
             row = db.execute("SELECT * FROM users WHERE username = ?", (u,)).fetchone()
 
         if row and row["password"] == sha256(p):
             role = "admin" if row["is_admin"] else "user"
-            flash("Login successful ✅", "success")
             return render_template("success.html")
 
-        flash("❌ Invalid credentials.", "error")
+        return render_template("fail.html")
     return render_template("login.html")
 
 @app.route("/success")
-def success(): return render_template("success.html", message="Success!")
+def success(): return render_template("success.html")
+
+@app.route("/fail")
+def fail(): return render_template("fail.html")
 
 if __name__ == "__main__":
     DB_PATH.touch(exist_ok=True)
